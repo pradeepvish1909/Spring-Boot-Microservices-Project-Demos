@@ -1,0 +1,76 @@
+Spring Security Form Based Authentication
+Form-based authentication uses standard HTML form (Login Form) fields to pass the username and password values to the server via a POST request.
+In Form-based authentication, the server validates the credentials provided and creates a "session" tied to a unique token stored in a cookie and passed between the client and on the server on each HTTP request. If the cookie is invalid or the user is logged out, the server then usually redirects to a login page.
+
+Add spring security and thymeleaf dependencies.
+Add controller class and define some endpoints.
+WelcomeController:
+[
+@Controller
+@RequestMapping("/api")
+public class WelcomeController {
+	
+	@GetMapping("/hello")
+	public String getHello() {
+		return "Hello World";
+	}
+	
+	@GetMapping("/greeting")
+	public String greeting() {
+		return "Welcome";
+	}
+}	
+]
+Define Template Welcome.html:
+[
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Spring Security</title>
+</head>
+<body>
+    <h1 th:text="'Welcome to Spring Security world!'"></h1>
+</body>
+</html>
+]
+
+Now lets configure SecurityConfig class:
+By default, Spring Security form login is enabled, However, as soon as any servlet-based configuration is provided form-based login must be explicitly provided.
+We have created some users and stored them in the InMemoryUserDetailsManager class object.
+[
+@Configuration
+public class SecurityConfig {
+	
+	@Bean
+	public PasswordEncoder passwordEncoder() {
+		return new BCryptPasswordEncoder();
+	}
+	
+	@Bean
+	SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception{
+		http.csrf(csrf -> csrf.disable());
+		
+		http.authorizeHttpRequests(authorizeRequests -> 
+			authorizeRequests.requestMatchers("/").permitAll().anyRequest().authenticated());
+		
+		http.formLogin(Customizer.withDefaults());
+		
+		return http.build();
+	}
+	
+	@Bean
+	public UserDetailsService userDetailsService() {
+		UserDetails user1 = User.withUsername("user1").password(passwordEncoder().encode("password1")).roles("USER").build();
+		
+		UserDetails admin1 = User.withUsername("admin1").password(passwordEncoder().encode("adminPassword1")).roles("ADMIN").build();
+		
+		UserDetails seller1 = User.withUsername("seller1").password(passwordEncoder().encode("sellerPassword")).roles("SELLER").build();
+		
+		return new InMemoryUserDetailsManager(user1, admin1, seller1);
+	}
+}
+]
+
+After executing the project, it will navigate to the login page. Enter username and password defined in securityconfig class. 
+
+Spring Security provided a built-in logout feature as well. Just enter http://localhost:8080/logout URL in the browser to logout from the application.
