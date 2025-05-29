@@ -1,0 +1,184 @@
+Spring Security Custom Form Based Database Authentication
+In the case of database authentication, the User enters login credentials like username and password in a Login form and submits the form. Next, we will validate User entered login credentials with the username and password in a database table.
+
+Add dependencies: Spring Web, Thymeleaf, Devtools, Spring Security, MySQL Driver, Spring Data JPA, Lombok
+
+Configure MySQL Database in application.properties file.
+[
+spring.datasource.url = jdbc:mysql://localhost:3306/actimize
+spring.datasource.username = actimize
+spring.datasource.password = actimize
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+
+spring.jpa.hibernate.ddl-auto=create-drop
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQL8Dialect
+]
+
+Create Model Entities: we will create User and Role JPA entities and establish MANY-to-MANY relationships between them. Let's use JPA annotations to establish MANY-to-MANY relationships between User and Role entities.
+User.java:
+[
+@Entity
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Table(name="users")
+public class User {
+	@Id
+	@GeneratedValue(strategy=GenerationType.IDENTITY)
+	private Long id;
+	
+	private String name;
+	
+	@Column(nullable = false, unique = true)
+	private String username;
+	
+	@Column(nullable = false, unique = true)
+	private String email;
+	
+	@Column(nullable = false)
+	private String password;
+	
+	@ManyToMany(fetch = FetchType.EAGER, cascade = CascadeType.ALL)
+	@JoinTable(name = "user_roles", joinColumns = @JoinColumn(name="user_id", referencedColumnName = "id"),
+		inverseJoinColumns = @JoinColumn(name="role_id", referencedColumnName = "id")
+			)
+	private Set<Role> roles;
+}
+]
+
+Role.java:
+[
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Entity
+@Table(name = "roles")
+public class Role {
+	@Id
+	@GeneratedValue(strategy = GenerationType.IDENTITY)
+	private Long id;
+	private String name;
+}
+]
+
+
+Define Repositories interfaces.
+
+Now lets write logic to load user details by name or email from the database.
+Lets create a CustomUserDetailsService which implements the UserDetailsService interface (Spring Security in-build interface) and provides an implementation for the loadUserByUsername() method.
+[
+@Service
+public class CustomUserDetailsService implements UserDetailsService{
+	
+	@Autowired
+	private UserRepository userRepository;
+
+	@Override
+	public UserDetails loadUserByUsername(String usernameOrEmail) throws UsernameNotFoundException {
+		User user = userRepository.findByUsernameOrEmail(usernameOrEmail, usernameOrEmail).orElseThrow(() -> 
+			new UsernameNotFoundException("User not found with username or email : "+usernameOrEmail));
+		
+		Set<GrantedAuthority> authorities = user.getRoles().stream().map((role) -> 
+			new SimpleGrantedAuthority(role.getName())).collect(Collectors.toSet());
+		
+		return new org.springframework.security.core.userdetails.User(user.getEmail(), user.getPassword(), authorities);
+		
+	}
+	
+}
+]
+Spring Security uses the UserDetailsService interface, which contain the loadUserByUsername(String username) method to look up UserDetails for a given username. 
+The UserDetails interface represents an authenticated user object and spring security provides an out-of-the-box implementation of org.springframework.security.core.userdetails.User. 
+
+
+Spring Security Configuration: Lets create a class SecurityConfig and add the following configuration to it.
+[
+@Configuration
+public class SecurityConfig {
+	@Autowired
+	private UserDetailsService userDetailsService;
+	
+	@Bean
+	public PasswordEncoder passwordEncoder() {
+		return new BCryptPasswordEncoder();
+	}
+	
+	@Bean
+	public AuthenticationManager authentiationManager(AuthenticationConfiguration configuration) throws Exception{
+		return configuration.getAuthenticationManager();
+	}
+	
+	@Bean
+	SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception{
+		http.csrf(csrf -> csrf.disable());
+		http.authorizeHttpRequests(authorizeRequests -> authorizeRequests.requestMatchers("/api/**").permitAll().anyRequest().authenticated());
+		http.formLogin(form -> form
+				.loginPage("/api/login")
+				.loginProcessingUrl("/api/login")
+				.defaultSuccessUrl("/api/welcome", true)
+				.permitAll()
+				).logout(logout -> logout.logoutRequestMatcher(new AntPathRequestMatcher("/api/logout"))
+						.logoutSuccessUrl("/api/login?logout")
+						.permitAll()
+						);
+		//http.httpBasic(Customizer.withDefaults());
+		
+		return http.build();
+	}
+}
+]
+When the login page is specified in the Spring Security configuration, you are responsible for rendering the page.
+We are using the Spring Security provided BCryptPasswordEncoder class to encrypt the passwords.
+
+
+Define custom html login page and welcome page. 
+
+
+Add Controller class.
+[
+@RestController
+@RequestMapping("/api")
+public class AuthController {
+	@Autowired
+	private AuthenticationManager authenticationManager;
+	
+//	@PostMapping("/login")
+//	public ResponseEntity<String> authenticateUser(@RequestBody LoginDTO loginDTO){
+//		Authentication authentication = authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(loginDTO.getUsernameOrEmail(), loginDTO.getPassword()));
+//		
+//		SecurityContextHolder.getContext().setAuthentication(authentication);
+//		
+//		return new ResponseEntity<>("User signed-in successfully!.", HttpStatus.OK);
+//	}
+	
+	@GetMapping("/login")
+    public String login(){
+        return "login";
+    }
+	
+	@GetMapping("/welcome")
+	public String greeting() {
+		return "welcome";
+	}
+}
+]
+After we run the project, Hibernate will automatically create tables users, roles and user_roles. Since this project just demonstrates the login form dunctionality so Now we need to manually add the data in the respective tables. For that use below queries:
+INSERT INTO `users` VALUES
+(1,'ramesh@gmail.com','ramesh','$2a$10$5PiyN0MsG0y886d8xWXtwuLXK0Y7zZwcN5xm82b4oDSVr7yF0O6em','ramesh'),
+(2,'admin@gmail.com','admin','$2a$10$gqHrslMttQWSsDSVRTK1OehkkBiXsJ/a4z2OURU./dizwOQu5Lovu','admin');
+
+INSERT INTO `roles` VALUES (1,'ROLE_ADMIN'),(2,'ROLE_USER');
+
+INSERT INTO `user_roles` VALUES (2,1),(1,2);
+
+
+
+After executing these queries the data will be inserted into tables.
+
+Now hit the endpoint, you will be redirected to the login page. Enter credentials as username=ramesh, password=Ramesh, or username=admin, password=admin.
+After successful login, welcome page will be displayed.
+
+
