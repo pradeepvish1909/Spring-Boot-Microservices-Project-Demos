@@ -1,0 +1,275 @@
+Project: Order File Processor (File Connector Operations and JMS)
+Project Ref: fileProcessorHttpListener
+This project handles:
+. File operations (read/write/close).
+. Dynamic routing based on filename patterns (like *order*).
+. Optionally triggered via HTTP endpoint or Scheduler.
+. Final Step: publishing processed info to a JMS Queue.
+. A response is returned if triggered via HTTP.
+
+
+Use Case:
+Retail stores upload different types of files daily:
+. order_20250609.txt (Order files)
+. invoice_20250609.txt (Invoice files)
+. inventory_20250609.txt (Inventory files)
+
+System should:
+1. Periodically poll a folder (via scheduler) OR allow manual trigger via HTTP.
+2. Identify file type by filename (e.g., contains "order", "invoice").
+3. Route to specific handler (OrderService, InvoiceService, etc.).
+4. Perform specific logic (e.g., parse order lines, calculate totals).
+5. Write processed data to a new output file.
+6. Send filename and status to a JMS Queue (e.g., ActiveMQ).
+7. Return success/failure (in HTTP trigger).
+
+
+Flow:
+HTTP Call OR Scheduler
+        ↓
+FileProcessorController OR FileScheduler
+        ↓
+FileProcessingService.routeFile(file)
+        ↓
+if file contains "order" → OrderFileService.process()
+if file contains "invoice" → InvoiceFileService.process()
+...
+        ↓
+Write to output file
+        ↓
+Send message to JMS queue
+        ↓
+Return response
+
+
+
+1. Create Spring Boot Project with Dependencies:
+Spring Web, Spring Boot DevTools, JMS (ActiveMQ or RabbitMQ), Lombok
+
+Included Structure:
+input/                   # Place sample files here
+output/                  # Processed files will be written here
+src/
+└── main/
+    ├── java/
+    │   └── com.example.fileprocessor
+    │       ├── controller/
+    │       │   └── FileProcessorController.java
+    │       ├── messaging/
+    │       │   └── JmsProducer.java
+    │       ├── scheduler/
+    │       │   └── FileScheduler.java
+    │       ├── service/
+    │       │   ├── FileProcessingService.java
+    │       │   ├── OrderFileService.java
+    │       │   ├── InvoiceFileService.java
+    │       │   └── InventoryFileService.java
+    │       └── FileProcessorApp.java
+    └── resources/
+        └── application.properties
+
+
+
+Core Logic Explained:
+. Controller: FileProcessorController with HTTP file processing.
+. Service: FileProcessingService for routing based on filename.
+. OrderFileService: Reads, processes, and writes file content.
+. JMS Producer: Sends processed file messages to a JMS queue.
+
+Place all the sample files to directory.
+
+
+application.properties:
+[
+spring.application.name=fileProcessor
+
+server.port=8085
+
+spring.activemq.broker-url=tcp://localhost:61616
+spring.activemq.user=admin
+spring.activemq.password=admin
+spring.jms.pub-sub-domain=false
+jms.queue.name=file-processing-status
+]
+
+FileProcessorApplication:
+[
+@SpringBootApplication
+//@EnableScheduling
+public class FileProcessorApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(FileProcessorApplication.class, args);
+	}
+
+}
+]
+
+
+FileProcessorController.java:
+[
+@RestController
+@RequestMapping("/api/files")
+public class FileProcessorController {
+	
+	@Autowired
+	private FileProcessingService fileProcessingService;
+	
+	@PostMapping("/process")
+	public ResponseEntity<String> processFile(@RequestParam String filePath){
+		System.out.println("FilePath : "+filePath);
+		File file = new File(filePath);
+		System.out.println("File : "+file);
+		
+		if (!file.exists()) return ResponseEntity.badRequest().body("File not found");
+		
+		boolean status = fileProcessingService.routeFile(file);
+		return ResponseEntity.ok("File processed: " + (status ? "Success" : "Failure"));
+	}
+}
+]
+
+
+FileProcessingService.java:
+[
+@Service
+public class FileProcessingService {
+	
+	@Autowired private OrderFileService orderService;
+    @Autowired private InvoiceFileService invoiceService;
+    @Autowired private InventoryFileService inventoryService;
+    @Autowired private JmsProducer jmsProducer;
+
+	public boolean routeFile(File file) {
+		System.out.println("File : "+file);
+		boolean result = false;
+		try {
+			String name = file.getName().toLowerCase();
+			
+			System.out.println("File Name: "+name);
+					
+			if(name.contains("order")) {
+				result = orderService.process(file);
+			} else if(name.contains("invoice")) {
+				result = invoiceService.process(file);
+			} else if(name.contains("inventory")) {
+				result = inventoryService.process(file);
+			}
+			
+			//jmsProducer.sendMessage("Processed : "+file.getName());
+			// In FileProcessingService.java
+			jmsProducer.sendStatusMessage(file.getName(), result ? "Processed Successfully" : "Processing Failed");
+			
+			//Move to archive folder
+//			if(result) {
+//				FileUtils.moveToArchive(file, "C:/Users/Pradeep/Desktop/Repo/Spring File Operation/Archive");
+//			}
+			
+			//Copy to archive folder and change the name of source files.
+//			if (result) {
+//	            FileUtils.copyToArchive(file, "C:/Users/Pradeep/Desktop/Repo/Spring File Operation/Archive");
+//	            FileUtils.markFileAsProcessed(file);
+//	        }
+
+			return result;
+		}
+		catch(Exception e) {
+			e.printStackTrace();
+			jmsProducer.sendStatusMessage(file.getName(), "Processing Exception: " + e.getMessage());
+			return false;
+		}
+		
+	}
+
+}
+]
+
+
+OrderFileService.java:
+[
+@Service
+public class OrderFileService {
+	
+	public boolean process(File file) {
+		try(BufferedReader reader = new BufferedReader(new FileReader(file));
+				BufferedWriter writer = new BufferedWriter(new FileWriter("C:/Users/Pradeep/Desktop/Repo/Spring File Operation/SampleOutputFiles/processed_"+file.getName()))
+				){
+			String line;
+			while((line = reader.readLine()) != null) {
+				writer.write(line+" - ORDER PROCESSED");
+				writer.newLine();
+			}
+			return true;
+		} catch(IOException e) {
+			e.printStackTrace();
+			return false;
+		}
+	}
+}
+]
+Same for Inventory and InvoiceFileService.
+
+
+JMSProducer.java: Send Message Using JmsTemplate.
+[
+@Component
+public class JmsProducer {
+	
+	@Autowired
+	private JmsTemplate jmsTemplate;
+	
+	@Value("${jms.queue.name}")
+	private String queue;
+	
+	public void sendStatusMessage(String fileName, String status) {
+		String message = "File: "+fileName+", Status: "+status;
+		jmsTemplate.convertAndSend(queue, message);
+		System.out.println("📨 Sent JMS message: " + message);
+	}
+}
+]
+
+Add dependencies:
+If you’re using ActiveMQ, make sure you have this Maven dependency in your pom.xml:
+[
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-activemq</artifactId>
+</dependency>
+<dependency>
+    <groupId>javax.jms</groupId>
+    <artifactId>javax.jms-api</artifactId>
+    <version>2.0.1</version>
+</dependency>
+]
+
+
+
+Setup ActiveMQ:
+Download ActiveMQ, Extract and Launch ActiveMQ. Go to the bin\win64 folder. Double-click activemq.bat — this starts the broker.
+Open browser: http://localhost:8161. Default credentials, user=admin, password=admin. You’ll see the ActiveMQ admin dashboard.
+
+
+Flow Summary: How Message will be sent
+[
+Scheduler OR Http Endpoint
+ → Controller
+   → Service
+     → Read File
+     → Process (Route based on filename)
+     → Write File
+     → Send status to JMS Queue
+ → Return response
+]
+
+
+
+Trigger via REST (Controller). 
+http://localhost:8085/api/files/process?filePath=C:/Users/Pradeep/Desktop/Repo/Spring File Operation/SampleFiles/invoice_001.txt
+
+See the message in ActiveMQ. You will see the message like:
+File: order_file.txt, Status: Processed Successfully
+
+
+
+Similarly we can do using Scheduler.
